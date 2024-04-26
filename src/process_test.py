@@ -117,17 +117,17 @@ def calculate_mean_intensity(img: np.ndarray, contour: np.ndarray) -> float:
 
 # Usage of the functions
 img = load_image("assets/roi.png")
-imshow(img, title="Original Image")
+# imshow(img, title="Original Image")
 
 gray, bin_img, kernel = preprocess_image(img)
-imshow(bin_img, title="Binary Image after Morphology")
+# imshow(bin_img, title="Binary Image after Morphology")
 
 dist = compute_distance_transform(bin_img)
 fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(8, 8))
-imshow(dist, axes[0, 1], title="Distance Transform")
+# imshow(dist, axes[0, 1], title="Distance Transform")
 
 sure_fg, sure_bg, unknown = segment_image(bin_img, dist, kernel)
-imshow(sure_bg, axes[0, 0], title="Sure Background")
+# imshow(sure_bg, axes[0, 0], title="Sure Background")
 
 ret, markers = cv2.connectedComponents(sure_fg)
 markers += 1
@@ -148,17 +148,11 @@ wells, centers = zip(*wells_and_centers)
 # Usage of the function
 wells_intensities = [calculate_mean_intensity(gray, well) for well in wells]  # Assuming 'gray' is your grayscale image
 
-# To visualize the mean intensities:
-fig, ax = plt.subplots()
-ax.bar(range(len(wells_intensities)), wells_intensities, color='blue')
-ax.set_title("Mean Intensity of Each Well")
-ax.set_xlabel("Well Index")
-ax.set_ylabel("Mean Intensity")
-plt.show()
-
 # To visualize the mean intensities using Plotly in dark theme/mode:
 df = pd.DataFrame({'Well Index': range(len(wells_intensities)), 'Mean Intensity': wells_intensities})
-fig = px.bar(df, x='Well Index', y='Mean Intensity', title='Mean Intensity of Each Well', template='plotly_dark')
+fig = px.scatter(df, x='Well Index', y='Mean Intensity', title='Mean Intensity of Each Well', template='plotly_dark')
 fig.show()
+
+":?lk.j,hmgnfbdvz"
 
 # This plots a simple bar graph showing the mean intensity of each well.

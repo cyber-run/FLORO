@@ -1,5 +1,5 @@
-from custom_widgets import create_range_box
 import threading, cProfile, cv2, os, pstats, sys
+from custom_widgets import create_range_box
 from PIL import Image, ImageTk
 from tkinter import filedialog
 import customtkinter as ctk
@@ -21,6 +21,8 @@ class Application(ctk.CTk):
         self.geometry("1200x800")
         self.title("Python Image Viewer")
 
+        self.current_view = "roi"
+
         self.pr = cProfile.Profile()
 
         # Setup image and ROI variables
@@ -35,127 +37,14 @@ class Application(ctk.CTk):
 
         # Initialise widgets and bindings
         self.create_menu()
-        self.create_widgets()
         self.create_status_bar()
         self.bind_events()
+        self.setup_sidebar()
+        self.create_widgets()
+
 
         # Init/reset transformation matrix
         self.reset_transform()
-
-    def update_threshold(self, entry, delta, limit):
-        """Update the threshold value from entry with delta and enforce limits."""
-        current_value = int(entry.get())
-        new_value = current_value + delta
-        if delta > 0:
-            new_value = min(limit, new_value)  # Increment
-        else:
-            new_value = max(0, new_value)  # Decrement, ensuring it does not go below 0
-        entry.delete(0, 'end')
-        entry.insert(0, str(new_value))
-        self.threshold_value = new_value
-        # self.update_image()
-
-    def update_kernel_size(self, entry, delta, limit):
-        """Update the kernel size value from entry with delta and enforce limits."""
-        current_value = int(entry.get())
-        new_value = current_value + delta
-        if delta > 0:
-            new_value = min(limit, new_value)  # Increment
-        else:
-            new_value = max(1, new_value)  # Decrement, ensuring it does not go below 1
-        entry.delete(0, 'end')
-        entry.insert(0, str(new_value))
-        self.kernel_size_value = new_value
-        # self.update_image()
-
-    def process_roi_threaded(self):
-        """Start the ROI processing in a separate thread."""
-        thread = threading.Thread(target=self.process_roi)
-        thread.start()
-
-    def process_roi(self):
-        """Process the selected ROI with the current threshold and kernel size, when the button is pressed."""
-        if self.pil_image is None or self.roi_start is None or self.roi_end is None:
-            ctk.CTkMessageBox.show_info("Process ROI", "No ROI defined or image loaded.")
-            return
-
-        self.status.configure(text="Processing ROI...")  # Assume there's a method to update a status bar
-
-        self.pr.enable()    # Enable profiler
-
-        processed_image = self._process_roi()  # Refactor the processing into a private method
-        if processed_image:
-            self.pil_image = processed_image
-            self.draw_image()
-        self.status.configure(text="ROI Processing Completed.")  # Update status bar
-
-        self.pr.disable()
-        ps = pstats.Stats(self.pr, stream=sys.stdout)
-        ps.print_stats()
-
-    def _process_roi(self):
-        """Process the selected ROI with the current threshold and kernel size using watershed segmentation."""
-        if self.pil_image is None or self.roi_start is None or self.roi_end is None:
-            return None
-
-        # Convert PIL image to OpenCV format
-        cv_image = cv2.cvtColor(np.array(self.pil_image), cv2.COLOR_RGB2BGR)
-
-        # Extract the ROI coordinates
-        x1, y1 = int(self.roi_start[0]), int(self.roi_start[1])
-        x2, y2 = int(self.roi_end[0]), int(self.roi_end[1])
-
-        # Ensure the coordinates are within the image bounds
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(cv_image.shape[1], x2), min(cv_image.shape[0], y2)
-
-        # Extract the ROI from the image
-        roi = cv_image[y1:y2, x1:x2]
-
-        # Convert cv roi to PIL format
-        # roi = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
-        # self.write_img(roi)
-
-        # Convert ROI to grayscale and apply threshold
-        gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        ret, thresh = cv2.threshold(gray_roi, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-        # Noise removal using morphological opening
-        kernel = np.ones((3,3), np.uint8)
-        opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
-
-        # Sure background area (dilate to increase the object boundary to background)
-        sure_bg = cv2.dilate(opening, kernel, iterations=3)
-
-        # Finding sure foreground area using distance transform
-        dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
-        ret, sure_fg = cv2.threshold(dist_transform, 0.7*dist_transform.max(), 255, 0)
-
-        # Finding unknown region
-        sure_fg = np.uint8(sure_fg)
-        unknown = cv2.subtract(sure_bg, sure_fg)
-
-        # Marker labelling
-        ret, markers = cv2.connectedComponents(sure_fg)
-
-        # Add one to all labels so that sure background is not 0, but 1
-        markers = markers + 1
-
-        # Now, mark the region of unknown with zero
-        markers[unknown == 255] = 0
-
-        # Apply watershed
-        markers = cv2.watershed(roi, markers)
-        roi[markers == -1] = [0, 0, 255]  # Mark watershed boundary in red
-
-        # Replace the ROI in the original image with the processed ROI
-        cv_image[y1:y2, x1:x2] = roi
-
-        # Convert the processed image back to PIL format
-        processed_image = Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB))
-
-        # Return the processed image
-        return processed_image
     
     def write_img(self, img):
         """Write the image to a file."""
@@ -165,6 +54,12 @@ class Application(ctk.CTk):
         )
         if filename:
             img.save(filename)
+    
+    def create_widgets(self):
+        """Create the status bar and canvas widgets."""
+        self.canvas = ctk.CTkCanvas(self, background="black")
+        self.canvas.pack(side="right", expand=True, fill="both")
+
 
     def create_menu(self):
         """Create the menu bar and bind menu items to their respective functions."""
@@ -180,22 +75,6 @@ class Application(ctk.CTk):
         self.bind_all("<Control-o>", self.menu_open_clicked)
         self.configure(menu=self.menu_bar)
 
-    def create_widgets(self):
-        """Create the status bar and canvas widgets."""
-        self.canvas = ctk.CTkCanvas(self, background="black")
-        self.canvas.pack(expand=True, fill="both")
-
-        self.control_frame = ctk.CTkFrame(self)
-        self.control_frame.pack(side="top", pady=10)
-
-        self.threshold_entry, self.threshold_frame = create_range_box(self.control_frame, "Threshold", 0, 255, self.threshold_value, self.update_threshold)
-        self.threshold_frame.pack(side="left", padx=20, pady=10)
-
-        self.kernel_size_entry, self.kernel_frame = create_range_box(self.control_frame, "Kernel Size", 1, 10, self.kernel_size_value, self.update_kernel_size)
-        self.kernel_frame.pack(side="left", padx=20, pady=10)
-
-        self.process_button = ctk.CTkButton(self.control_frame, text="Process ROI", command=self.process_roi_threaded)
-        self.process_button.pack(side="left", padx=20, pady=(28, 0))
 
     def create_status_bar(self):
         """Create the status bar with image information and pixel coordinates."""
@@ -415,6 +294,75 @@ class Application(ctk.CTk):
                 width=2,
             )
 
+    def setup_roi_selector(self):
+        pass
+
+    def setup_data_view(self):
+        pass
+
+    def switch_view(self, view):
+        '''
+        Switch between the roi view and data analysis view
+        '''
+        if view == "roi" and self.current_view != "roi":
+            # Destroy the existing widgets in the data view if they exist
+            self.current_view = "roi"
+
+
+            # Set up the roi view
+            self.setup_roi_selector()
+            self.home_button.configure(fg_color="#27272a")
+            self.data_button.configure(fg_color=self.fg_color1)
+            
+        elif view == "data" and self.current_view != "data":
+            self.current_view = "data"
+
+            # Destroy existing widgets in the roi view if they exist
+            self.canvas.pack_forget()
+
+            # Set up the data analysis view
+            self.setup_data_view()
+            self.data_button.configure(fg_color="#27272a")
+            self.home_button.configure(fg_color=self.fg_color1)
+
+    def setup_sidebar(self):
+        '''
+        Set up the sidebar with buttons for switching between views
+        '''
+        self.sidebar_frame = ctk.CTkFrame(self, width=50, corner_radius=0, border_width=-2, border_color="#1c1c1c")
+        self.sidebar_frame.pack(side="left", fill="y")
+        self.fg_color1 = self.sidebar_frame.cget("fg_color")
+
+        # Load icons
+        home_icon = ctk.CTkImage(Image.open("assets/track.png"), size=(30, 30))
+        data_icon = ctk.CTkImage(Image.open("assets/data.png"), size=(30, 30))
+
+        self.home_button = ctk.CTkButton(
+            self.sidebar_frame,
+            text="",
+            image=home_icon,
+            height=40,
+            width=40,
+            corner_radius=5,
+            fg_color="#27272a",
+            hover_color="#1c1c1c",
+            command=lambda: self.switch_view("roi")  # Switch to roi view when clicked
+        )
+        self.home_button.pack(side="top", padx=5, pady=5)
+
+        self.data_button = ctk.CTkButton(
+            self.sidebar_frame,
+            text="",
+            image=data_icon,
+            height=40,
+            width=40,
+            corner_radius=5,
+            fg_color=self.fg_color1,
+            hover_color="#1c1c1c",
+            command=lambda: self.switch_view("data")  # Switch to data analysis view when clicked
+        )
+        self.data_button.pack(side="top", padx=5, pady=5)
+
 
 if __name__ == "__main__":
     # Set the theme of customtkinter
@@ -422,6 +370,4 @@ if __name__ == "__main__":
     ctk.set_default_color_theme("assets/style.json")  # Options include: "blue", "dark-blue", "green"
 
     app = Application()
-    # Run c profile
-    # cProfile.run("app.mainloop()", sort="cumulative")
     app.mainloop()
