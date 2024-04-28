@@ -8,17 +8,22 @@ class ImageCanvas(ctk.CTkCanvas):
         super().__init__(master, **kwargs)
         self.frontend = frontend
         self.pil_image = None
-        self.roi_start = None
-        self.roi_end = None
+        self.rois = []
+        self.current_roi = None
         self.is_drawing_roi = False
         self.mat_affine = np.eye(3)
+        self.selected_roi_index = None
+
+        self.roi_colour = "#223BC9"
+        self.hover_colour = "#067FD0"
+        self.selected_colour = "#E63B60"
 
         self.bind("<Button-1>", self.mouse_down_left)
         self.bind("<B1-Motion>", self.mouse_move_left)
-        self.bind("<Motion>", self.mouse_move)
         self.bind("<Double-Button-1>", self.mouse_double_click_left)
         self.bind("<ButtonRelease-1>", self.mouse_up_left)
         self.bind("<MouseWheel>", self.mouse_wheel)
+        self.bind("<BackSpace>", self.delete_selected_roi)
 
     def set_image(self, pil_image):
         self.pil_image = pil_image
@@ -28,9 +33,10 @@ class ImageCanvas(ctk.CTkCanvas):
     def mouse_down_left(self, event):
         self.__old_event = event
         if event.state & 0x0004:  # Check if Ctrl key is pressed
-            self.roi_start = self.to_image_point(event.x, event.y)
-            self.roi_end = None
-            self.is_drawing_roi = True
+            start_point = self.to_image_point(event.x, event.y)
+            if len(start_point) > 0:
+                self.current_roi = {"start": self.to_image_point(event.x, event.y), "end": None}
+                self.is_drawing_roi = True
         else:
             self.is_drawing_roi = False
 
@@ -38,29 +44,28 @@ class ImageCanvas(ctk.CTkCanvas):
         if self.pil_image is None:
             return
         if self.is_drawing_roi:
-            self.roi_end = self.to_image_point(event.x, event.y)
-            self.draw_image()
+            end_point = self.to_image_point(event.x, event.y)
+            if len(end_point) > 0:
+                self.current_roi["end"] = self.to_image_point(event.x, event.y)
+                self.draw_image()
+                self.draw_current_roi()  # Add this line to draw the current ROI being drawn
         else:
-            self.translate(event.x - self.__old_event.x, event.y - self.__old_event.y)
-            self.draw_image()
+            try:
+                self.translate(event.x - self.__old_event.x, event.y - self.__old_event.y)
+                self.draw_image()
+            except AttributeError:
+                pass
         self.__old_event = event
 
     def mouse_up_left(self, event):
         if self.is_drawing_roi:
-            self.roi_end = self.to_image_point(event.x, event.y)
+            end_point = self.to_image_point(event.x, event.y)
+            if len(end_point) > 0:
+                self.current_roi["end"] = end_point
+                self.rois.append(self.current_roi)
+                self.update_roi_table()
             self.is_drawing_roi = False
             self.draw_image()
-
-
-    def mouse_move(self, event):
-        if self.pil_image is None:
-            return
-
-        image_point = self.to_image_point(event.x, event.y)
-        if len(image_point) > 0:
-            self.frontend.update_pixel_coordinates(f"({image_point[0]:.2f}, {image_point[1]:.2f})")
-        else:
-            self.frontend.update_pixel_coordinates("(--, --)")
 
     def mouse_double_click_left(self, event):
         if self.pil_image is None:
@@ -144,6 +149,7 @@ class ImageCanvas(ctk.CTkCanvas):
 
     def draw_image(self):
         self.delete("all")
+        self.delete("current_roi")  # Add this line to remove the previous current ROI
 
         if self.pil_image is None:
             return
@@ -172,12 +178,48 @@ class ImageCanvas(ctk.CTkCanvas):
         self.image = ImageTk.PhotoImage(image=dst)
         self.create_image(0, 0, anchor="nw", image=self.image)
 
-        if self.roi_start is not None and self.roi_end is not None and len(self.roi_start) > 0 and len(self.roi_end) > 0:
-            # Clamp ROI coordinates to image boundaries
-            x1 = max(0, min(self.roi_start[0], self.pil_image.width))
-            y1 = max(0, min(self.roi_start[1], self.pil_image.height))
-            x2 = max(0, min(self.roi_end[0], self.pil_image.width))
-            y2 = max(0, min(self.roi_end[1], self.pil_image.height))
+        for index, roi in enumerate(self.rois):
+            if roi["start"] is not None and roi["end"] is not None and len(roi["start"]) > 0 and len(roi["end"]) > 0:
+                x1 = max(0, min(roi["start"][0], self.pil_image.width))
+                y1 = max(0, min(roi["start"][1], self.pil_image.height))
+                x2 = max(0, min(roi["end"][0], self.pil_image.width))
+                y2 = max(0, min(roi["end"][1], self.pil_image.height))
+
+                roi_start_canvas = self.to_canvas_point(x1, y1)
+                roi_end_canvas = self.to_canvas_point(x2, y2)
+
+                color = self.selected_colour if index == self.selected_roi_index else self.roi_colour
+                self.create_rectangle(
+                    roi_start_canvas[0],
+                    roi_start_canvas[1],
+                    roi_end_canvas[0],
+                    roi_end_canvas[1],
+                    outline=color,
+                    width=2,
+                    tags=f"roi_{index}"
+                )
+
+                self.tag_bind(f"roi_{index}", "<Enter>", lambda event, i=index: self.on_roi_hover(i))
+                self.tag_bind(f"roi_{index}", "<Leave>", lambda event, i=index: self.on_roi_leave(i))
+                self.tag_bind(f"roi_{index}", "<Button-1>", lambda event, i=index: self.on_roi_click(i))
+
+    def update_roi_table(self):
+        self.frontend.roi_table.delete(*self.frontend.roi_table.get_children())
+        for index, roi in enumerate(self.rois, start=1):
+            if roi["start"] is not None and roi["end"] is not None and len(roi["start"]) >= 2 and len(roi["end"]) >= 2:
+                start_x, start_y = roi["start"][:2]
+                end_x, end_y = roi["end"][:2]
+                self.frontend.roi_table.insert(parent="", index="end", values=(index, f"({start_x:.2f}, {start_y:.2f})"))
+
+    def draw_current_roi(self):
+        if self.current_roi is not None:
+            start_x, start_y = self.current_roi["start"][:2]
+            end_x, end_y = self.current_roi["end"][:2]
+
+            x1 = max(0, min(start_x, self.pil_image.width))
+            y1 = max(0, min(start_y, self.pil_image.height))
+            x2 = max(0, min(end_x, self.pil_image.width))
+            y2 = max(0, min(end_y, self.pil_image.height))
 
             roi_start_canvas = self.to_canvas_point(x1, y1)
             roi_end_canvas = self.to_canvas_point(x2, y2)
@@ -186,6 +228,27 @@ class ImageCanvas(ctk.CTkCanvas):
                 roi_start_canvas[1],
                 roi_end_canvas[0],
                 roi_end_canvas[1],
-                outline="red",
+                outline=self.roi_colour,
                 width=2,
+                tags="current_roi"
             )
+
+    def on_roi_hover(self, index):
+        self.itemconfig(f"roi_{index}", outline=self.hover_colour)
+
+    def on_roi_leave(self, index):
+        if index != self.selected_roi_index:
+            self.itemconfig(f"roi_{index}", outline=self.roi_colour)
+
+    def on_roi_click(self, index):
+        if self.selected_roi_index is not None:
+            self.itemconfig(f"roi_{self.selected_roi_index}", outline=self.roi_colour)
+        self.selected_roi_index = index
+        self.itemconfig(f"roi_{index}", outline=self.selected_colour)
+
+    def delete_selected_roi(self, event):
+        if self.selected_roi_index is not None and self.selected_roi_index < len(self.rois):
+            self.rois.pop(self.selected_roi_index)
+            self.selected_roi_index = None
+            self.draw_image()
+            self.update_roi_table()

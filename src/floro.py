@@ -1,158 +1,212 @@
-import threading
-import cProfile
 import os
-from CTkTable import *
-from CTkMenuBar import *
-from PIL import Image
+import json
+import sqlite3
 from tkinter import filedialog
+from PIL import Image
+from CTkMenuBar import *
+from CTkMessagebox import *
 import customtkinter as ctk
-from image_canvas import ImageCanvas
+from front_end import FrontEnd
 
-
-class FrontEnd:
-    def __init__(self, master):
-        self.master = master
-        self.label_image_pixel = None
-        self.label_image_info = None
-        self.home_button = None
-        self.data_button = None
-        self.fg_color1 = None
-        self.image_canvas = None
-
-        self.create_status_bar()
-        self.setup_sidebar()
-        self.create_canvas_view()
-
-    def create_canvas_view(self):
-        # Create canvas view frame
-        self.canvas_view_frame = ctk.CTkFrame(self.master, corner_radius=0, border_width=-2, border_color="#1c1c1c")
-        self.canvas_view_frame.grid(row=0, column=1, sticky="nsew")
-
-        self.image_canvas = ImageCanvas(self.canvas_view_frame, frontend=self, background="black", highlightthickness=0)
-        self.image_canvas.pack(side="top", expand=True, fill="both", padx=5, pady=5)
-
-    def create_status_bar(self):
-        frame_statusbar = ctk.CTkFrame(self.master, corner_radius=0)
-        frame_statusbar.grid(row=1, column=0, columnspan=2, sticky="ew")
-
-        self.label_image_pixel = ctk.CTkLabel(frame_statusbar, text="(x, y)")
-        self.label_image_pixel.pack(side="left", padx=5, anchor="w")
-
-        status = ctk.CTkLabel(frame_statusbar, text="Idle")
-        status.pack(side="left", padx=5, anchor="center", expand=True, fill="x")
-
-        self.label_image_info = ctk.CTkLabel(frame_statusbar, text="Image info")
-        self.label_image_info.pack(side="right", padx=5, anchor="e")
-
-    def setup_sidebar(self):
-        sidebar_frame = ctk.CTkFrame(self.master, width=30, corner_radius=0, border_width=-2, border_color="#1c1c1c")
-        sidebar_frame.grid(row=0, column=0, sticky="nsw")
-        sidebar_frame.grid_propagate(False)
-
-        self.fg_color1 = sidebar_frame.cget("fg_color")
-
-        home_icon = ctk.CTkImage(Image.open("assets/track.png"), size=(30, 30))
-        data_icon = ctk.CTkImage(Image.open("assets/data.png"), size=(30, 30))
-
-        self.home_button = ctk.CTkButton(
-            sidebar_frame,
-            text="",
-            image=home_icon,
-            height=40,
-            width=40,
-            corner_radius=5,
-            fg_color="#27272a",
-            hover_color="#1c1c1c",
-            command=lambda: self.master.switch_view("roi")
-        )
-        self.home_button.pack(side="top", padx=5, pady=5)
-
-        self.data_button = ctk.CTkButton(
-            sidebar_frame,
-            text="",
-            image=data_icon,
-            height=40,
-            width=40,
-            corner_radius=5,
-            fg_color=self.fg_color1,
-            hover_color="#1c1c1c",
-            command=lambda: self.master.switch_view("data")
-        )
-        self.data_button.pack(side="top", padx=5, pady=5)
-
-    def update_image_info(self, image_info):
-        self.label_image_info.configure(text=image_info)
-
-    def update_pixel_coordinates(self, coordinates):
-        self.label_image_pixel.configure(text=coordinates)
-
-    def switch_view_buttons(self, view):
-        if view == "roi":
-            self.home_button.configure(fg_color="#27272a")
-            self.data_button.configure(fg_color=self.fg_color1)
-        elif view == "data":
-            self.data_button.configure(fg_color="#27272a")
-            self.home_button.configure(fg_color=self.fg_color1)
-
-    def setup_roi_selector(self):
-        pass
-
-    def setup_data_view(self):
-        pass
+Image.MAX_IMAGE_PIXELS = None
 
 
 class Application(ctk.CTk):
     def __init__(self):
         super().__init__(fg_color="#151518")
 
-        self.geometry("1200x800")
-        self.title("FLORO")
+        self.configure_root()
+        self.create_menu()
+        self.bind_events()
+
+        self.frontend = FrontEnd(self)
 
         self.current_view = "roi"
         self.pil_image = None
 
+    def configure_root(self):
+        self.title("FLORO")
+        self.geometry("1200x800")
         self.columnconfigure(0, weight=0)
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
         self.rowconfigure(1, weight=0)
 
-        self.frontend = FrontEnd(self)
-
-        self.create_menu()
-        self.bind_events()
-
-    def write_img(self, img):
-        filename = filedialog.asksaveasfilename(
-            filetypes=[("PNG", ".png"), ("JPEG", ".jpg"), ("Tiff", ".tif")],
-            initialdir=os.getcwd()
-        )
-        if filename:
-            img.save(filename)
-
     def create_menu(self):
-        if os.name == "nt":
-            title_menu = CTkTitleMenu(self)
-        else:
-            title_menu = CTkMenuBar(self)
+        title_menu = CTkTitleMenu(self) if os.name == "nt" else CTkMenuBar(self)
 
         file_menu = title_menu.add_cascade(text="File")
         file_dropdown = CustomDropdownMenu(widget=file_menu)
         file_dropdown.add_option(option="Open", command=self.menu_open_clicked)
         file_dropdown.add_separator()
+        file_dropdown.add_option(option="New Project", command=self.menu_new_project_clicked)
+        file_dropdown.add_separator()
         file_dropdown.add_option(option="Exit", command=self.destroy)
 
-        self.bind_all("<Control-o>", self.menu_open_clicked)
-
     def bind_events(self):
-        pass
+        self.bind_all("<Control-o>", self.menu_open_clicked)
+        self.bind_all("<Control-n>", lambda event: self.menu_new_project_clicked())
 
     def menu_open_clicked(self, event=None):
-        filename = filedialog.askopenfilename(
-            filetypes=[("Image file", ".bmp .png .jpg .tif"), ("Bitmap", ".bmp"), ("PNG", ".png"), ("JPEG", ".jpg"),
-                       ("Tiff", ".tif")],
-            initialdir=os.getcwd()
-        )
+        filetypes = [
+            ("Image file", ".bmp .png .jpg .tif"),
+            ("Bitmap", ".bmp"),
+            ("PNG", ".png"),
+            ("JPEG", ".jpg"),
+            ("Tiff", ".tif")
+        ]
+        filename = filedialog.askopenfilename(filetypes=filetypes, initialdir=os.getcwd())
         self.set_image(filename)
+
+    def menu_new_project_clicked(self):
+        new_project_window = ctk.CTkToplevel(self)
+        new_project_window.title("New Project")
+        new_project_window.geometry("400x250")
+        new_project_window.attributes("-topmost", True)
+
+        folder_path_label = ctk.CTkLabel(new_project_window, text="Folder Path:")
+        folder_path_label.pack(pady=10)
+
+        folder_path_entry = ctk.CTkEntry(new_project_window, width=300)
+        folder_path_entry.pack()
+
+        select_folder_button = ctk.CTkButton(
+            new_project_window,
+            text="Select Folder",
+            command=lambda: self.select_folder(folder_path_entry),
+            fg_color="#F9F9FA"
+        )
+        select_folder_button.pack(pady=10)
+
+        project_name_label = ctk.CTkLabel(new_project_window, text="Project Name:")
+        project_name_label.pack(pady=10)
+
+        project_name_entry = ctk.CTkEntry(new_project_window, width=300)
+        project_name_entry.pack()
+
+        create_project_button = ctk.CTkButton(
+            new_project_window,
+            text="Create Project",
+            command=lambda: self.create_project(
+                folder_path_entry.get(),
+                project_name_entry.get(),
+                new_project_window
+            ),
+            fg_color="#F9F9FA"
+        )
+        create_project_button.pack(pady=10)
+
+    def select_folder(self, folder_path_entry):
+        folder_path = filedialog.askdirectory()
+        folder_path_entry.delete(0, ctk.END)
+        folder_path_entry.insert(0, folder_path)
+
+    def create_project(self, folder_path, project_name, new_project_window):
+        if folder_path and project_name:
+            project_data = {
+                "folder_path": folder_path,
+                "project_name": project_name
+            }
+            with open("project_data.json", "w") as file:
+                json.dump(project_data, file)
+            new_project_window.destroy()
+            self.create_database(folder_path)
+            self.load_project()
+            self.display_first_image()
+        else:
+            CTkMessagebox(title="Error", message="Please provide a folder path and project name.")
+
+    def create_database(self, folder_path):
+        conn = sqlite3.connect("project.sqlite3")
+        cursor = conn.cursor()
+
+        cursor.execute("DROP TABLE IF EXISTS images")
+        cursor.execute("DROP TABLE IF EXISTS roi_table")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS images (
+                image_id INTEGER PRIMARY KEY,
+                image_path TEXT
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS roi_table (
+                roi_id INTEGER PRIMARY KEY,
+                drug_name TEXT,
+                roi_points TEXT
+            )
+        """)
+
+        image_paths = self.get_image_paths(folder_path)
+        for image_path in image_paths:
+            cursor.execute("INSERT INTO images (image_path) VALUES (?)", (image_path,))
+
+        conn.commit()
+        conn.close()
+
+    def save_roi(self, roi_id, drug_name, roi_points):
+        conn = sqlite3.connect("project.sqlite3")
+        cursor = conn.cursor()
+
+        roi_points_str = str(roi_points)
+        cursor.execute(
+            "INSERT INTO roi_table (roi_id, drug_name, roi_points) VALUES (?, ?, ?)",
+            (roi_id, drug_name, roi_points_str)
+        )
+
+        conn.commit()
+        conn.close()
+
+    def get_roi_data(self, roi_id):
+        conn = sqlite3.connect("project.sqlite3")
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT drug_name, roi_points FROM roi_table WHERE roi_id = ?", (roi_id,))
+        result = cursor.fetchone()
+
+        if result:
+            drug_name, roi_points_str = result
+            roi_points = eval(roi_points_str)
+            return drug_name, roi_points
+        else:
+            return None, None
+
+    def display_first_image(self):
+        image_paths = self.get_image_paths_from_database()
+        if image_paths:
+            first_image_path = image_paths[0]
+            self.set_image(first_image_path)
+        else:
+            CTkMessagebox(title="Error", message="No images found in the folder.")
+
+    def get_image_paths(self, folder_path):
+        image_extensions = [".bmp", ".png", ".jpg", ".tif"]
+        image_paths = [
+            os.path.join(folder_path, filename)
+            for filename in os.listdir(folder_path)
+            if os.path.splitext(filename)[1].lower() in image_extensions
+        ]
+        return image_paths
+
+    def load_project(self):
+        try:
+            with open("project_data.json", "r") as file:
+                project_data = json.load(file)
+                project_name = project_data["project_name"]
+                self.frontend.update_project_name(project_name)
+        except FileNotFoundError:
+            pass
+
+    def get_image_paths_from_database(self):
+        conn = sqlite3.connect("project.sqlite3")
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT image_path FROM images")
+        image_paths = [row[0] for row in cursor.fetchall()]
+
+        conn.close()
+        return image_paths
 
     def set_image(self, filename):
         if not filename:
@@ -160,8 +214,8 @@ class Application(ctk.CTk):
         self.pil_image = Image.open(filename)
         self.frontend.image_canvas.set_image(self.pil_image)
 
-        self.title(f"FLORO - {os.path.basename(filename)}")
-        self.frontend.update_image_info(f"{self.pil_image.format}: {self.pil_image.width}x{self.pil_image.height} {self.pil_image.mode}")
+        image_info = f"{self.pil_image.format}: {self.pil_image.width}x{self.pil_image.height} {self.pil_image.mode}"
+        self.frontend.update_image_info(image_info)
         os.chdir(os.path.dirname(filename))
 
     def switch_view(self, view):
@@ -170,7 +224,6 @@ class Application(ctk.CTk):
             self.frontend.canvas_view_frame.grid(row=0, column=1, sticky="nsew")
             self.frontend.setup_roi_selector()
             self.frontend.switch_view_buttons("roi")
-
         elif view == "data" and self.current_view != "data":
             self.current_view = "data"
             self.frontend.canvas_view_frame.grid_forget()
