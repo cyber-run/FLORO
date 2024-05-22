@@ -42,7 +42,8 @@ class CustomTreeview(ttk.Treeview):
     def delete_selected_row(self, event):
         selected_item = self.selection()
         if selected_item:
-            self.delete(selected_item)
+            roi_id = self.set(selected_item, "#1")
+            self.master.master.master.delete_roi(int(roi_id))
 
     def on_double_click(self, event):
         region = self.identify("region", event.x, event.y)
@@ -68,8 +69,11 @@ class CustomTreeview(ttk.Treeview):
         entry.focus_set()
 
     def update_cell(self, item, column, entry):
+        # Get the new value from the entry widget
+        new_value = entry.get()
+
         # Update the cell value in the treeview
-        self.set(item, column, entry.get())
+        self.set(item, column, new_value)
 
         # Destroy the entry widget
         entry.destroy()
@@ -79,6 +83,11 @@ class CustomTreeview(ttk.Treeview):
 
         # Set focus back to the treeview
         self.focus_set()
+
+        # Call the method in the Application class to update the drug name in the database
+        if column == "#2":  # Assuming "Drug Name" is the second column
+            roi_id = self.set(item, "#1")  # Get the ROI ID from the first column
+            self.master.master.master.update_drug_name(roi_id, new_value)
 
 if __name__ == "__main__":
     # Create the main window
